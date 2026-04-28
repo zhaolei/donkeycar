@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Scripts to train a model using tensorflow or pytorch.
-Basic usage:
+Examples:
   TensorFlow: train.py --tubs data/ --model models/mypilot.h5 --type linear
   PyTorch:    train.py --tubs data/ --model models/mypilot.ckpt --type resnet34 --framework pytorch
 
