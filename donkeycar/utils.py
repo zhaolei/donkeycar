@@ -495,6 +495,13 @@ def get_model_by_type(model_type: str, cfg: 'Config') -> Union['KerasPilot', 'Fa
     if model_type is None:
         model_type = cfg.DEFAULT_MODEL_TYPE
     logger.info(f'get_model_by_type: model type is: {model_type}')
+
+    # Torch models are defined in the dedicated torch model factory.
+    if model_type in ("resnet18", "resnet34"):
+        from donkeycar.parts.pytorch.torch_utils import \
+            get_model_by_type as get_torch_model_by_type
+        return get_torch_model_by_type(model_type, cfg)
+
     input_shape = (cfg.IMAGE_H, cfg.IMAGE_W, cfg.IMAGE_DEPTH)
     if 'tflite_' in model_type:
         interpreter = TfLite()

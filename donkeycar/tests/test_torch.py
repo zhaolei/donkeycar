@@ -47,7 +47,8 @@ def car_dir(tmpdir_factory):
 
 # define the test data
 d1 = Data(type='resnet18', name='resnet18a', convergence=1.0, pretrained=None)
-test_data = [d1]
+d2 = Data(type='resnet34', name='resnet34a', convergence=1.0, pretrained=None)
+test_data = [d1, d2]
 
 
 @is_jetson
@@ -80,7 +81,7 @@ def test_train(config: Config, car_dir: str, data: Data) -> None:
 @is_jetson
 @pytest.mark.skipif(not torch_available,
                     reason='torch not installed')
-@pytest.mark.parametrize('model_type', ['resnet18'])
+@pytest.mark.parametrize('model_type', ['resnet18', 'resnet34'])
 def test_training_pipeline(config: Config, model_type: str, car_dir: str) \
         -> None:
     """
