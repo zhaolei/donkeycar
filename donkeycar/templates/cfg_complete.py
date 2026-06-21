@@ -118,12 +118,86 @@ JOYSTICK_THROTTLE_DIR = -1.0
 JOYSTICK_DEVICE_FILE = "/dev/input/js0"
 
 # The type of controller being used.
-# Options: 'ps3', 'ps4', 'xbox', 'nimbus', 'wiiu', 'F710', 'rc3', 'MM1 (use for RC Hat)', 'custom'
+# Options: 'ps3', 'ps4', 'xbox', 'nimbus', 'wiiu', 'F710', 'rc3', 'MM1 (use for RC Hat)', 'custom', 'mavlink'
+# Use 'mavlink' to read RC sticks and the mode switch from a MAVLink
+# flight controller (PX4/ArduPilot). See the MAVLINK section below.
 CONTROLLER_TYPE = 'xbox'
 
 # Enable listening for remote joystick control over the network.
 USE_NETWORKED_JS = False
 NETWORK_JS_SERVER_IP = None
+
+
+# ------------------------------------------------------------------------------
+# MAVLINK CONFIGURATION
+# ------------------------------------------------------------------------------
+# Talk to a MAVLink flight controller (PX4 by default, ArduPilot supported).
+# - Set CONTROLLER_TYPE = 'mavlink' to read RC sticks + a mode switch channel
+#   from the flight controller (selects autopilot 'local' vs manual 'user').
+# - Set DRIVE_TRAIN_TYPE = 'MAVLINK' to drive the vehicle by sending
+#   RC_CHANNELS_OVERRIDE to the flight controller.
+# - All values inside the MAVLINK dict can also be tuned live from the web
+#   page at http://<car>:8887/mavlink without editing this file.
+HAVE_MAVLINK = False
+MAVLINK = {
+	# --- link ---
+	# Serial e.g. "/dev/ttyS0" or "/dev/ttyACM0", or UDP e.g. "udpin:0.0.0.0:14550"
+	"MAVLINK_CONNECTION": "/dev/ttyS0",
+	"MAVLINK_BAUDRATE": 921600,
+	"MAVLINK_AUTOPILOT": "px4",        # "px4" (default) or "ardupilot"
+	"MAVLINK_SOURCE_SYSTEM": 255,      # this companion's system id
+	"MAVLINK_TARGET_SYSTEM": 0,        # 0 => auto-detect from heartbeat
+	"MAVLINK_TARGET_COMPONENT": 0,     # 0 => auto-detect from heartbeat
+
+	# --- reading RC sticks (manual driving) ---
+	"RC_STEERING_CHANNEL": 1,          # 1-based RC channel for steering
+	"RC_THROTTLE_CHANNEL": 3,          # 1-based RC channel for throttle
+	"RC_STEERING_MIN": 1000,
+	"RC_STEERING_MID": 1500,
+	"RC_STEERING_MAX": 2000,
+	"RC_STEERING_INVERT": False,
+	"RC_THROTTLE_MIN": 1000,
+	"RC_THROTTLE_MID": 1500,
+	"RC_THROTTLE_MAX": 2000,
+	"RC_THROTTLE_INVERT": False,
+	"RC_THROTTLE_HAS_REVERSE": True,   # center stick = stop, below center = reverse
+	"RC_DEADZONE": 20,                 # us deadzone around mid value
+
+	# --- mode switch channel (autopilot vs manual) ---
+	"RC_MODE_CHANNEL": 5,              # 0 to disable (then use web/default mode)
+	"RC_MODE_3POSITION": False,        # False=2-pos(user/local), True=3-pos
+	"RC_MODE_LOW_PWM": 1300,           # below => 'user' (manual)
+	"RC_MODE_HIGH_PWM": 1700,          # above => 'local' (autopilot); mid => 'local_angle'
+
+	# --- arming ---
+	"ARM_CHANNEL": 0,                  # 0 to disable channel-based arming
+	"ARM_PWM_THRESHOLD": 1700,         # above => arm, below => disarm
+	"AUTO_ARM": False,                 # arm automatically once link is up
+	"ARM_FORCE": False,                # force arm (bypass pre-arm checks)
+
+	# --- writing override (drive) ---
+	"OVERRIDE_STEERING_CHANNEL": 1,
+	"OVERRIDE_THROTTLE_CHANNEL": 3,
+	"OUT_STEERING_MIN": 1000,
+	"OUT_STEERING_MID": 1500,
+	"OUT_STEERING_MAX": 2000,
+	"OUT_STEERING_INVERT": False,
+	"OUT_THROTTLE_MIN": 1000,          # full reverse pwm
+	"OUT_THROTTLE_MID": 1500,          # neutral / stopped pwm
+	"OUT_THROTTLE_MAX": 2000,          # full forward pwm
+	"OUT_THROTTLE_INVERT": False,
+	"OUT_THROTTLE_HAS_REVERSE": True,  # center-neutral throttle with reverse below mid
+
+	# --- two-wheel differential drive ---
+	"DIFFERENTIAL_DRIVE": False,       # True for tank-style two-motor mixing
+	"OVERRIDE_LEFT_CHANNEL": 1,
+	"OVERRIDE_RIGHT_CHANNEL": 3,
+
+	# --- safety / behaviour ---
+	"MANUAL_RELEASE": True,            # in 'user' mode release channels to physical RC
+	"FAILSAFE_NEUTRAL": True,          # send neutral when pilot output is missing
+	"OVERRIDE_RATE_HZ": 0,             # 0 = send every drive loop
+}
 
 
 # ------------------------------------------------------------------------------
@@ -145,6 +219,9 @@ NETWORK_JS_SERVER_IP = None
 # "DC_TWO_WHEEL_L298N" using HBridge in 3-pin mode to control two drive motors, one of the left and one on the right.
 # "MOCK" no drive train.  This can be used to test other features in a test rig.
 # "VESC" VESC Motor controller to set servo angle and duty cycle
+# "MAVLINK" drive a MAVLink flight controller (PX4/ArduPilot) via RC_CHANNELS_OVERRIDE.
+#           Supports neutral-center throttle with reverse and two-wheel differential.
+#           See the MAVLINK configuration section above.
 
 # Select the drive train type. This determines how the software talks to the motors.
 # "PWM_STEERING_THROTTLE": Standard RC car (Servo + ESC)

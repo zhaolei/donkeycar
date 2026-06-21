@@ -720,6 +720,19 @@ def add_user_controller(V, cfg, use_joystick, input_image='ui/image_array'):
                 outputs=['user/steering', 'user/throttle',
                          'user/mode', 'recording'],
                 threaded=False)
+        elif cfg.CONTROLLER_TYPE == "mavlink":
+            #
+            # Read RC sticks and the mode switch from a MAVLink flight
+            # controller (PX4/ArduPilot).
+            #
+            from donkeycar.parts.mavlink import MavlinkController
+            ctr = MavlinkController(cfg)
+            V.add(
+                ctr,
+                inputs=['user/mode', 'recording'],
+                outputs=['user/steering', 'user/throttle',
+                         'user/mode', 'recording'],
+                threaded=False)
         else:
             #
             # custom game controller mapping created with
@@ -1133,6 +1146,16 @@ def add_drivetrain(V, cfg):
             V.add(steering, inputs=['steering'], threaded=True)
             V.add(throttle, inputs=['throttle'], threaded=True)
     
+        elif cfg.DRIVE_TRAIN_TYPE == "MAVLINK":
+            #
+            # Drive a MAVLink flight controller (PX4/ArduPilot) by sending
+            # RC_CHANNELS_OVERRIDE. Throttle supports a neutral center with
+            # reverse (1000-2000us) and optional two-wheel differential mixing.
+            #
+            from donkeycar.parts.mavlink import MavlinkDriver
+            logger.info("Creating MAVLink driver")
+            V.add(MavlinkDriver(cfg), inputs=['steering', 'throttle', 'user/mode'])
+
         elif cfg.DRIVE_TRAIN_TYPE == "VESC":
             from donkeycar.parts.actuator import VESC
             logger.info("Creating VESC at port {}".format(cfg.VESC_SERIAL_PORT))

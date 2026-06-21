@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" name="viewport" content="width=device-width, initial-scale=1">
+    <title>Donkey MAVLink Configuration</title>
+    <link href="/static/bootstrap/3.3.7/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding: 16px; }
+        .status-badge { font-size: 14px; margin-right: 8px; }
+        .param-row { margin-bottom: 6px; }
+        .param-row label { font-weight: normal; margin-bottom: 0; }
+        .rc-bar { height: 14px; background: #eee; border-radius: 3px; position: relative; }
+        .rc-fill { height: 100%; background: #5bc0de; border-radius: 3px; }
+        .rc-val { font-family: monospace; }
+        fieldset { border: 1px solid #ddd; padding: 10px 14px; margin-bottom: 14px; border-radius: 4px; }
+        legend { font-size: 15px; font-weight: bold; width: auto; padding: 0 8px; border: none; margin-bottom: 4px; }
+        .group-col { display: inline-block; vertical-align: top; min-width: 320px; margin-right: 24px; }
+    </style>
+</head>
+
+<body>
+    <nav class="navbar navbar-default">
+        <div class="container-fluid">
+            <div class="navbar-header"><a class="navbar-brand" href="/">Donkey</a></div>
+            <ul class="nav navbar-nav">
+                <li><a href="/drive">Drive</a></li>
+                <li><a href="/calibrate">Calibrate</a></li>
+                <li class="active"><a href="/mavlink">MAVLink</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container-fluid">
+        <h2>MAVLink Configuration</h2>
+        <p class="text-muted">
+            Live-tune the MAVLink link, RC mapping, drive override and arming.
+            Changes apply immediately to the running car. To make them permanent,
+            copy the values into the <code>MAVLINK</code> dict in your
+            <code>myconfig.py</code>.
+        </p>
+
+        <div id="unavailable" class="alert alert-warning" style="display:none">
+            MAVLink is not active on this car. Set <code>CONTROLLER_TYPE = 'mavlink'</code>
+            and/or <code>DRIVE_TRAIN_TYPE = 'MAVLINK'</code> (and <code>HAVE_MAVLINK = True</code>)
+            then restart.
+        </div>
+
+        <div id="panel" style="display:none">
+            <fieldset>
+                <legend>Status</legend>
+                <span id="st-conn" class="label label-default status-badge">link: ?</span>
+                <span id="st-arm" class="label label-default status-badge">disarmed</span>
+                <span id="st-target" class="status-badge text-muted"></span>
+                <span id="st-ap" class="status-badge text-muted"></span>
+                <span id="st-rcage" class="status-badge text-muted"></span>
+                <div style="margin-top:10px">
+                    <button id="btn-arm" class="btn btn-danger btn-sm">Arm</button>
+                    <button id="btn-disarm" class="btn btn-warning btn-sm">Disarm</button>
+                    <button id="btn-release" class="btn btn-default btn-sm">Release Override</button>
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Live RC Channels</legend>
+                <div id="rc-channels"></div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Parameters</legend>
+                <form id="params-form" onsubmit="return false;">
+                    <div id="params-groups"></div>
+                </form>
+                <button id="btn-apply" class="btn btn-primary">Apply changes</button>
+                <span id="apply-status" class="text-success" style="margin-left:10px"></span>
+            </fieldset>
+        </div>
+    </div>
+
+    <script>
+        var socket;
+        var currentParams = {};
+        var built = false;
+
+        // logical grouping of parameter keys for a tidy UI
+        var GROUPS = [
+            { title: "Link", keys: ["MAVLINK_CONNECTION", "MAVLINK_BAUDRATE", "MAVLINK_AUTOPILOT", "MAVLINK_SOURCE_SYSTEM", "MAVLINK_TARGET_SYSTEM", "MAVLINK_TARGET_COMPONENT"] },
+            { title: "RC Read - Steering", keys: ["RC_STEERING_CHANNEL", "RC_STEERING_MIN", "RC_STEERING_MID", "RC_STEERING_MAX", "RC_STEERING_INVERT"] },
+            { title: "RC Read - Throttle", keys: ["RC_THROTTLE_CHANNEL", "RC_THROTTLE_MIN", "RC_THROTTLE_MID", "RC_THROTTLE_MAX", "RC_THROTTLE_INVERT", "RC_THROTTLE_HAS_REVERSE", "RC_DEADZONE"] },
+            { title: "Mode Switch", keys: ["RC_MODE_CHANNEL", "RC_MODE_3POSITION", "RC_MODE_LOW_PWM", "RC_MODE_HIGH_PWM"] },
+            { title: "Arming", keys: ["ARM_CHANNEL", "ARM_PWM_THRESHOLD", "AUTO_ARM", "ARM_FORCE"] },
+            { title: "Drive Override - Steering", keys: ["OVERRIDE_STEERING_CHANNEL", "OUT_STEERING_MIN", "OUT_STEERING_MID", "OUT_STEERING_MAX", "OUT_STEERING_INVERT"] },
+            { title: "Drive Override - Throttle", keys: ["OVERRIDE_THROTTLE_CHANNEL", "OUT_THROTTLE_MIN", "OUT_THROTTLE_MID", "OUT_THROTTLE_MAX", "OUT_THROTTLE_INVERT", "OUT_THROTTLE_HAS_REVERSE"] },
+            { title: "Differential Drive", keys: ["DIFFERENTIAL_DRIVE", "OVERRIDE_LEFT_CHANNEL", "OVERRIDE_RIGHT_CHANNEL"] },
+            { title: "Safety", keys: ["MANUAL_RELEASE", "FAILSAFE_NEUTRAL", "OVERRIDE_RATE_HZ"] }
+        ];
+
+        function fieldId(key) { return "p_" + key; }
+
+        function buildForm(params) {
+            var container = document.getElementById('params-groups');
+            container.innerHTML = "";
+            var used = {};
+            GROUPS.forEach(function (g) {
+                var col = document.createElement('div');
+                col.className = 'group-col';
+                var lg = document.createElement('div');
+                lg.innerHTML = '<strong>' + g.title + '</strong>';
+                col.appendChild(lg);
+                g.keys.forEach(function (key) {
+                    if (!(key in params)) return;
+                    used[key] = true;
+                    col.appendChild(makeRow(key, params[key]));
+                });
+                container.appendChild(col);
+            });
+            // any keys not covered by a group
+            var rest = [];
+            Object.keys(params).forEach(function (k) { if (!used[k]) rest.push(k); });
+            if (rest.length) {
+                var col = document.createElement('div');
+                col.className = 'group-col';
+                col.innerHTML = '<strong>Other</strong>';
+                rest.forEach(function (key) { col.appendChild(makeRow(key, params[key])); });
+                container.appendChild(col);
+            }
+            built = true;
+        }
+
+        function makeRow(key, value) {
+            var row = document.createElement('div');
+            row.className = 'param-row';
+            var label = document.createElement('label');
+            label.style.display = 'inline-block';
+            label.style.width = '230px';
+            label.textContent = key;
+            var input;
+            if (typeof value === 'boolean') {
+                input = document.createElement('input');
+                input.type = 'checkbox';
+                input.checked = value;
+            } else if (typeof value === 'number') {
+                input = document.createElement('input');
+                input.type = 'number';
+                input.value = value;
+                input.style.width = '120px';
+            } else {
+                input = document.createElement('input');
+                input.type = 'text';
+                input.value = value;
+                input.style.width = '160px';
+            }
+            input.id = fieldId(key);
+            input.setAttribute('data-key', key);
+            input.setAttribute('data-type', typeof value);
+            label.appendChild(input);
+            row.appendChild(label);
+            return row;
+        }
+
+        function collectParams() {
+            var out = {};
+            document.querySelectorAll('[data-key]').forEach(function (el) {
+                var key = el.getAttribute('data-key');
+                var type = el.getAttribute('data-type');
+                if (type === 'boolean') {
+                    out[key] = el.checked;
+                } else if (type === 'number') {
+                    out[key] = parseFloat(el.value);
+                } else {
+                    out[key] = el.value;
+                }
+            });
+            return out;
+        }
+
+        function renderRc(status) {
+            var rc = status.rc || {};
+            var el = document.getElementById('rc-channels');
+            var html = '';
+            for (var i = 1; i <= 16; i++) {
+                var v = rc[i] || 0;
+                var pct = Math.max(0, Math.min(100, ((v - 1000) / 1000) * 100));
+                html += '<div class="param-row"><label style="width:90px">CH' + i +
+                    '</label><span class="rc-val" style="display:inline-block;width:60px">' + v +
+                    '</span><span style="display:inline-block;width:200px;vertical-align:middle">' +
+                    '<span class="rc-bar"><span class="rc-fill" style="width:' + pct + '%"></span></span></span></div>';
+            }
+            el.innerHTML = html;
+        }
+
+        function renderStatus(status) {
+            var c = document.getElementById('st-conn');
+            c.textContent = status.connected ? 'link: connected' : 'link: no heartbeat';
+            c.className = 'label status-badge ' + (status.connected ? 'label-success' : 'label-danger');
+            var a = document.getElementById('st-arm');
+            a.textContent = status.armed ? 'ARMED' : 'disarmed';
+            a.className = 'label status-badge ' + (status.armed ? 'label-danger' : 'label-default');
+            document.getElementById('st-target').textContent =
+                'target sys/comp: ' + status.target_system + '/' + status.target_component;
+            document.getElementById('st-ap').textContent = 'autopilot: ' + status.autopilot;
+            document.getElementById('st-rcage').textContent = 'rc age: ' + status.rc_age + 's';
+            renderRc(status);
+        }
+
+        function handleMessage(msg) {
+            if (msg.available === false) {
+                document.getElementById('unavailable').style.display = 'block';
+                document.getElementById('panel').style.display = 'none';
+                return;
+            }
+            document.getElementById('unavailable').style.display = 'none';
+            document.getElementById('panel').style.display = 'block';
+            if (msg.params && !built) {
+                currentParams = msg.params;
+                buildForm(msg.params);
+            }
+            if (msg.status) renderStatus(msg.status);
+        }
+
+        function send(obj) {
+            if (socket && socket.readyState === 1) socket.send(JSON.stringify(obj));
+        }
+
+        function connect() {
+            socket = new WebSocket('ws://' + window.location.hostname + ':' +
+                window.location.port + '/wsMavlink');
+            socket.onmessage = function (e) { handleMessage(JSON.parse(e.data)); };
+            socket.onclose = function () { setTimeout(connect, 2000); };
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            connect();
+            document.getElementById('btn-apply').onclick = function () {
+                send({ params: collectParams() });
+                var s = document.getElementById('apply-status');
+                s.textContent = 'applied';
+                setTimeout(function () { s.textContent = ''; }, 1500);
+            };
+            document.getElementById('btn-arm').onclick = function () { send({ action: 'arm' }); };
+            document.getElementById('btn-disarm').onclick = function () { send({ action: 'disarm' }); };
+            document.getElementById('btn-release').onclick = function () { send({ action: 'release' }); };
+        });
+    </script>
+</body>
+
+</html>

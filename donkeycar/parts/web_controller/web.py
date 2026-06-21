@@ -15,7 +15,7 @@ import time
 import asyncio
 
 import requests
-from tornado.ioloop import IOLoop
+from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.web import Application, RedirectHandler, StaticFileHandler, \
     RequestHandler
 from tornado.httpserver import HTTPServer
@@ -131,6 +131,8 @@ class LocalWebController(tornado.web.Application):
             (r"/wsDrive", WebSocketDriveAPI),
             (r"/wsCalibrate", WebSocketCalibrateAPI),
             (r"/calibrate", CalibrateHandler),
+            (r"/mavlink", MavlinkHandler),
+            (r"/wsMavlink", WebSocketMavlinkAPI),
             (r"/video", VideoAPI),
             (r"/wsTest", WsTest),
 
@@ -255,6 +257,104 @@ class CalibrateHandler(RequestHandler):
     """ Serves the calibration web page"""
     async def get(self):
         await self.render("templates/calibrate.html")
+
+
+class MavlinkHandler(RequestHandler):
+    """ Serves the MAVLink live configuration web page"""
+    async def get(self):
+        await self.render("templates/mavlink.html")
+
+
+class WebSocketMavlinkAPI(tornado.websocket.WebSocketHandler):
+    """
+    Websocket for the MAVLink configuration page. It exposes the shared
+    MavlinkConnection's live-tunable parameters and status, lets the user
+    edit channel mappings / PWM ranges on the fly, and arm/disarm.
+    """
+    def check_origin(self, origin):
+        return True
+
+    def _get_conn(self):
+        try:
+            from donkeycar.parts.mavlink import get_existing_mavlink
+            return get_existing_mavlink()
+        except Exception as e:
+            logger.warning(f"MAVLink not available: {e}")
+            return None
+
+    def _send_state(self):
+        conn = self._get_conn()
+        if conn is None:
+            payload = {"available": False}
+        else:
+            payload = {
+                "available": True,
+                "params": conn.params,
+                "status": conn.status(),
+            }
+        try:
+            self.write_message(json.dumps(payload))
+        except Exception as e:
+            logger.debug(f"wsMavlink send error: {e}")
+
+    def open(self):
+        logger.info("MAVLink config client connected")
+        self._send_state()
+        # push status periodically (rc values, armed state)
+        self.periodic = PeriodicCallback(self._send_status, 500)
+        self.periodic.start()
+
+    def _send_status(self):
+        conn = self._get_conn()
+        if conn is None:
+            return
+        try:
+            self.write_message(json.dumps({"status": conn.status()}))
+        except Exception:
+            pass
+
+    def on_message(self, message):
+        conn = self._get_conn()
+        data = json.loads(message)
+        if conn is None:
+            return
+
+        # live update of parameters
+        if 'params' in data and isinstance(data['params'], dict):
+            for k, v in data['params'].items():
+                if k in conn.params:
+                    # keep the original type where possible
+                    old = conn.params[k]
+                    try:
+                        if isinstance(old, bool):
+                            v = bool(v)
+                        elif isinstance(old, int):
+                            v = int(v)
+                        elif isinstance(old, float):
+                            v = float(v)
+                    except (TypeError, ValueError):
+                        pass
+                    conn.params[k] = v
+                    logger.info(f"MAVLink param {k} = {v}")
+
+        # arm / disarm commands
+        action = data.get('action')
+        if action == 'arm':
+            conn.arm(True, force=bool(conn.params.get("ARM_FORCE")))
+        elif action == 'disarm':
+            conn.disarm(force=bool(conn.params.get("ARM_FORCE")))
+        elif action == 'release':
+            conn.release_override()
+
+        # echo back full state after a change
+        self._send_state()
+
+    def on_close(self):
+        logger.info("MAVLink config client disconnected")
+        try:
+            self.periodic.stop()
+        except Exception:
+            pass
 
 
 def latch_buttons(buttons, pushes):
